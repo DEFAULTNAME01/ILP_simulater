@@ -7,4 +7,5 @@ TO compile：
 make
 OR：
 gcc -o test main.c function.c
-./test bubble.txt 冒泡排序
+./test bubb.txt 
+//上面是5个数的冒泡排序
