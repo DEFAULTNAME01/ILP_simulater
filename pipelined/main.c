@@ -13,17 +13,18 @@
 bool continuous_run = false;
 
 bool program_terminated = false;
+
 int32_t MEM[1024][4];//the memory 4 channel 
 
 Cache INSTR[512];
-int32_t RF[32];
+RegisterF RF[32];
 
 
 typedef struct {
     Cache INSTR;
     bool *is_busy ;
     int PC;
-    int *next_PC;
+    int next_PC;
     int32_t *fetched;
 } FetchArgs;
 
@@ -69,13 +70,17 @@ typedef struct {
 
 EStructure execute_register;
 
-sem_t sem_decode, sem_execute,sem_fetch;
+sem_t myclk;
 
 
-void* fetch(Cache INSTR, int PC, int *next_PC,int32_t *fetched) {
+void* fetch(Cache INSTR, int PC, int next_PC,int32_t *fetched) {
+           
     while (continuous_run) {
-        sem_wait(&sem_fetch);
+
+        
+        sem_post(&myclk);
         // Fetch逻辑
+        PC=next_PC;
         // 获取新指令
         printf("Fetching instruction at address %d\n", PC);
 		*fetched = INSTR.INST;
@@ -83,21 +88,24 @@ void* fetch(Cache INSTR, int PC, int *next_PC,int32_t *fetched) {
 		INSTR.j=INSTR.j+1;
         // ...
         fetch_register.valid = true;
-    
+        sem_wait(&myclk);
         printf("Data in pipeline is now valid\n");
-        execute_register.valid = false;
-        PC=*next_PC;
-        sem_post(&sem_decode);
+        
+        
+        
     }
     return NULL;
 }
 
 void* decode(int32_t fetched, IssueQueue *Isq) {
+
     while (continuous_run) {
-         while (!fetch_register.valid) {
-            // Wait for data to become valid
+
+
+         if (!fetch_register.valid) {
+            continue;// Wait for data to become valid
         }
-        sem_wait(&sem_decode);
+        sem_wait(&myclk);
         // Decode逻辑
         int op3 = fetched & 0xff;             // 从指令中提取操作数3,直接取8位
         int op2 = (fetched >> 8) & 0xff;     // 从指令中提取操作数2，右移8位取8位
@@ -139,12 +147,12 @@ void* decode(int32_t fetched, IssueQueue *Isq) {
 	}
         // ...
          fetch_register.valid = false;
-        sem_post(&sem_execute);
+     
     }
     return NULL;
 }
 
-void* execute(IssueQueue Isq, int *RF, int32_t (*MEM)[4], int PC,int *next_PC, _Bool *finished,int *error) {
+void* execute(IssueQueue Isq, RegisterF *RF, int32_t (*MEM)[4], int PC,int *next_PC, _Bool *finished,int *error) {
     char ch;
 
     while (!finished) {
@@ -153,48 +161,47 @@ void* execute(IssueQueue Isq, int *RF, int32_t (*MEM)[4], int PC,int *next_PC, _
             // Wait for data to become valid
         }
 
-        sem_wait(&sem_execute);
+       sem_wait(&myclk);
         // Execute逻辑
-        switch(Isq.Opcode)
-	{
+        switch(Isq.Opcode){
 		case ADD://21
-			RF[Isq.r] = RF[Isq.s1] + RF[Isq.s2]; *next_PC=PC + 1; break;
+			RF[Isq.r].value = RF[Isq.s1].value + RF[Isq.s2].value; *next_PC=PC + 1; break;
         case SUB://22
-			RF[Isq.r] = RF[Isq.s1] - RF[Isq.s2]; *next_PC=PC + 1; break;    
+			RF[Isq.r].value = RF[Isq.s1].value - RF[Isq.s2].value; *next_PC=PC + 1; break;    
 
 		case MUL://23
-			RF[Isq.r] = RF[Isq.s1] * RF[Isq.s2]; *next_PC=PC + 1; break;
+			RF[Isq.r].value = RF[Isq.s1].value * RF[Isq.s2].value; *next_PC=PC + 1; break;
         case DIV://24
-			RF[Isq.r] = RF[Isq.s1] / RF[Isq.s2]; *next_PC=PC + 1; break;
+			RF[Isq.r].value = RF[Isq.s1].value / RF[Isq.s2].value; *next_PC=PC + 1; break;
         case ADDi://11
-			RF[Isq.r] = RF[Isq.s1] + Isq.s2; *next_PC=PC + 1; break;
+			RF[Isq.r].value = RF[Isq.s1].value + Isq.s2; *next_PC=PC + 1; break;
         case SUBi://12
-			RF[Isq.r] = RF[Isq.s1] - Isq.s2; *next_PC=PC + 1; break;    
+			RF[Isq.r].value = RF[Isq.s1].value - Isq.s2; *next_PC=PC + 1; break;    
 		case MULi://13
-			RF[Isq.r] = RF[Isq.s1] * Isq.s2; *next_PC=PC + 1; break;
+			RF[Isq.r].value = RF[Isq.s1].value * Isq.s2; *next_PC=PC + 1; break;
         case DIVi://14
-			RF[Isq.r] = RF[Isq.s1] / Isq.s2; *next_PC=PC + 1; break;
+			RF[Isq.r].value = RF[Isq.s1].value / Isq.s2; *next_PC=PC + 1; break;
         case AND://25
-			RF[Isq.r] = RF[Isq.s1] && RF[Isq.s2]; *next_PC=PC + 1; break; 
+			RF[Isq.r].value = RF[Isq.s1].value && RF[Isq.s2].value; *next_PC=PC + 1; break; 
         case OR://26
-			RF[Isq.r] = RF[Isq.s1] || RF[Isq.s2]; *next_PC=PC + 1; break;  
+			RF[Isq.r].value = RF[Isq.s1].value || RF[Isq.s2].value; *next_PC=PC + 1; break;  
              
         case XOR://27
-			RF[Isq.r] = RF[Isq.s1] ^ RF[Isq.s2]; *next_PC=PC + 1; break;
+			RF[Isq.r].value = RF[Isq.s1].value ^ RF[Isq.s2].value; *next_PC=PC + 1; break;
         case NOT://28
-			RF[Isq.r] = ~RF[Isq.s1] ; *next_PC=PC + 1; break;
+			RF[Isq.r].value = ~RF[Isq.s1].value ; *next_PC=PC + 1; break;
         case MOV://29
-		RF[Isq.s2] =RF[Isq.s1]; *next_PC=PC + 1; break;
+		RF[Isq.s2].value =RF[Isq.s1].value; *next_PC=PC + 1; break;
          case MOVi://19
-                RF[RF[Isq.s2]] = RF[RF[Isq.s1]]; *next_PC=PC + 1; break;//printf("RF[Isq.r]: %x,RF[RF[Isq.r]]:%x\n",RF[Isq.r],RF[(RF[Isq.r])])
+                RF[RF[Isq.s2].value].value = RF[RF[Isq.s1].value].value; *next_PC=PC + 1; break;//printf("RF[Isq.r]: %x,RF[RF[Isq.r]]:%x\n",RF[Isq.r],RF[(RF[Isq.r])])
 		case LOAD://39
         {   
             if (Isq.s2==0)//LOAD  Isq.r to Isq.s1v
             {
-                RF[Isq.r] = (MEM[Isq.s1][0] << 24) | (MEM[Isq.s1][1] << 16) | (MEM[Isq.s1][2] << 8) | MEM[Isq.s1][3];
+                RF[Isq.r].value = (MEM[Isq.s1][0] << 24) | (MEM[Isq.s1][1] << 16) | (MEM[Isq.s1][2] << 8) | MEM[Isq.s1][3];
             *next_PC = PC + 1;
             }else{//LOADi//
-                RF[Isq.r] = Isq.s1;
+                RF[Isq.r].value = Isq.s1;
             *next_PC = PC + 1;
             }
             
@@ -203,8 +210,8 @@ void* execute(IssueQueue Isq, int *RF, int32_t (*MEM)[4], int PC,int *next_PC, _
 
 		case STORE://3a
         {   printf("s1: %d,s2:%d\n,r:%d\n",Isq.s1,Isq.s2,Isq.r);
-            int32_t mem_addr = RF[Isq.s1] + Isq.s2-1;//save to memory output line : RF[s1]+s2
-            int32_t data = RF[Isq.r];
+            int32_t mem_addr = RF[Isq.s1].value + Isq.s2-1;//save to memory output line : RF[s1]+s2
+            int32_t data = RF[Isq.r].value;
             MEM[mem_addr][0] = (data >> 24) & 0xFF;
             MEM[mem_addr][1] = (data >> 16) & 0xFF;
             MEM[mem_addr][2] = (data >> 8) & 0xFF;
@@ -216,15 +223,15 @@ void* execute(IssueQueue Isq, int *RF, int32_t (*MEM)[4], int PC,int *next_PC, _
 			*next_PC = Isq.r; break;
 
 		case JZL://CONDITIONAL_JUMP//3C
-			if (RF[Isq.s1] > RF[Isq.s2]) *next_PC = Isq.r ; else *next_PC=PC + 1; break;
+			if (RF[Isq.s1].value > RF[Isq.s2].value) *next_PC = Isq.r ; else *next_PC=PC + 1; break;
         case JZLi://CONDITIONAL_JUMP//2C
-			if (RF[(RF[Isq.s1])] > RF[(RF[Isq.s2])]) *next_PC = Isq.r ; else *next_PC=PC + 1; break;
+			if (RF[(RF[Isq.s1].value)].value > RF[(RF[Isq.s2].value)].value) *next_PC = Isq.r ; else *next_PC=PC + 1; break;
         case JZC://CONDITIONAL_JUMP Equal/compare//3D
-			if (RF[Isq.s1] - RF[Isq.s2] == 0) *next_PC = Isq.r ; else *next_PC=PC + 1; break;
+			if (RF[Isq.s1].value - RF[Isq.s2].value == 0) *next_PC = Isq.r ; else *next_PC=PC + 1; break;
         case JZCi://CONDITIONAL_JUMP Equal/compar//1d
-	    if (RF[Isq.s1] - Isq.s2 == 0) *next_PC = Isq.r ; else *next_PC=PC + 1; break;
+	    if (RF[Isq.s1].value - Isq.s2 == 0) *next_PC = Isq.r ; else *next_PC=PC + 1; break;
 		case JNZ://BRANCH_NOT_ZERO not Equal/compare//3E
-			if (RF[Isq.s1]-RF[Isq.s2] != 0) *next_PC = Isq.r; else *next_PC=PC + 1; break;
+			if (RF[Isq.s1].value-RF[Isq.s2].value != 0) *next_PC = Isq.r; else *next_PC=PC + 1; break;
 
 	
 		case HALT://3F
@@ -232,32 +239,59 @@ void* execute(IssueQueue Isq, int *RF, int32_t (*MEM)[4], int PC,int *next_PC, _
         case NOP://80
              *next_PC= PC+1; break;
 		default:
-			printf("Error: OP_mode not recognised: %d\n",Isq.Opcode); *error = 1; break;
-			
-	}
+			printf("Error: OP_mode not recognised: %d\n",Isq.Opcode); *error = 1; break;// 处理错误和其他逻辑
+        // ...
+			}
         }
         // ...
         decode_register.valid =false;
-        sem_post(&sem_fetch);
-
-        // 处理错误和其他逻辑
-        // ...
+        
+        RF[Isq.r].valid=true; 
+        next_PC=next_PC;
+        
     }
     return NULL;
 }
 
-void* control_function(void* arg) {
-    while (true) {
-        int ch = getchar();
-        if (ch == 's' || ch == 'S') {
-            continuous_run = false;
+
+
+void* control_and_clocks(void* arg) {
+    int ch,chr; 
+    ch = getchar();
+    while (!program_terminated) {
+       
+
+        
+        if (ch == 'p' || ch == 'P') {
+           
+            chr = getchar();
+            while(true){usleep(1000);
+            
+            sem_post(&myclk);
+            if (chr == 's' || chr == 'S') {
             program_terminated = true;
             break;
+            }
+            
+            }break;
         }
-        if (ch == 'p' || ch == 'P') {
-            continuous_run = true;
-            sem_post(&sem_fetch);
+        if (ch == 'l' || ch == 'L') {
+            while(true){
+                chr= getchar();
+             if (chr == '\n') {
+                usleep(1000);
+                sem_post(&myclk);
+           
+            }else if (chr == 's' || chr == 'S') {
+            program_terminated = true;
+            sem_post(&myclk);
+            break;
+            }
+            
         }
+        break;
+        
+    }
     }
     return NULL;
 }
@@ -266,8 +300,7 @@ int main(int argc, char *argv[]) {
     int ch;
     bool is_busy = false;
     pthread_t thread_fetch, thread_decode, thread_execute,thread_control;
-    // 在程序开头记录开始时间
-    time_t start_time = clock();
+    int next_PC=0;
     if (argc < 2) {
         printf("Usage: %s <instructions_file>\n", argv[0]);
         return 1;
@@ -293,24 +326,25 @@ int main(int argc, char *argv[]) {
     }
     
     // 初始化信号量
-    sem_init(&sem_fetch, 0, 0);
-    sem_init(&sem_decode, 0, 0);
-    sem_init(&sem_execute, 0, 0);
-    // ...
+    // Initialize semaphore
+    sem_init(&myclk, 0, 0);
+   
      // Wait for user input to start the program
     while (true) {
         ch = getchar();
         if (ch == 'p' || ch == 'P') {
             continuous_run = true;
-            sem_post(&sem_fetch);
+            program_terminated= false;
             break;
         }
     }
+    // 在程序开头记录开始时间
+    time_t start_time = clock();
     // 创建线程
     pthread_create(&thread_fetch, NULL, fetch, (void*)&fetch_args);
     pthread_create(&thread_decode, NULL, decode,(void*)&decode_args);
     pthread_create(&thread_execute, NULL, execute, (void*)&execute_args);
-    pthread_create(&thread_control, NULL, control_function, NULL);
+    pthread_create(&thread_control, NULL, control_and_clocks, NULL);
    
 
     // 等待线程结束
@@ -318,13 +352,9 @@ int main(int argc, char *argv[]) {
     pthread_join(thread_decode, NULL);
     pthread_join(thread_execute, NULL);
     pthread_join(thread_control, NULL);
-    // 程序结束时记录结束时间
     
 
-    // 计算按下'p'到程序结束的时间差
-   
-
-    // 显示结果
+    // 程序结束时记录结束时间 显示结果 计算按下'p'到程序结束的时间差
     time_t end_time = clock();
     double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC * 1000.0;
 
@@ -332,11 +362,8 @@ int main(int argc, char *argv[]) {
     printf("running_times : %.4f ms\n", elapsed_time);
     // printf("total_cycles : %d\n",total_cycles);
 
-    // 销毁信号量
-    // ...
-    sem_destroy(&sem_fetch);
-    sem_destroy(&sem_decode);
-    sem_destroy(&sem_execute);
+   // Destroy semaphore
+    sem_destroy(&myclk);
     
     return 0;
 }
